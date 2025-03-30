@@ -1,5 +1,6 @@
 using UnityEngine;
 using System.Collections.Generic;
+using Unity.VisualScripting;
 
 public enum TypeSteeringBehaviour
 {
@@ -22,11 +23,19 @@ public class AI : MonoBehaviour
     [SerializeField] private float mass = 1f;
     [SerializeField] private float slowingRadius = 5f; 
     [SerializeField] private float evasionPredictionTime = 2f;
+    [SerializeField] private float minX, maxX, minZ, maxZ;
 
     [Header("Wander Settings")]
     [SerializeField] private float wanderRadius = 1f;
     [SerializeField] private float wanderDistance = 3f;
     [SerializeField] private float wanderJitter = 0.5f;
+
+    [Header("Path Following")]
+    [SerializeField] private PathFollowing pathFollowing;
+
+    [Header("Obstacle Avoidance")]
+    [SerializeField] private float obstacleDetectionDistance = 5f;
+    [SerializeField] private float avoidanceStrength = 10f;
 
     private Vector3 velocity;
     private Vector3 targetPreviousPosition;
@@ -50,14 +59,18 @@ public class AI : MonoBehaviour
             velocity = Vector3.ClampMagnitude(velocity + steeringForce, maxSpeed);
         }
 
-        transform.position += velocity * Time.deltaTime;
-
         if (velocity != Vector3.zero)
         {
             transform.forward = velocity.normalized;
         }
 
         velocity = Vector3.Lerp(velocity, velocity.normalized * maxSpeed, Time.deltaTime * 2f);
+
+        Vector3 newPosition = transform.position + velocity * Time.deltaTime;
+        newPosition.x = Mathf.Clamp(newPosition.x, minX, maxX);
+        newPosition.z = Mathf.Clamp(newPosition.z, minZ, maxZ);
+
+        transform.position = newPosition;
     }
     private void LateUpdate()
     {
@@ -98,30 +111,54 @@ public class AI : MonoBehaviour
             currentBehaviour = TypeSteeringBehaviour.Wander;
             Debug.Log("Cambiado a Wander");
         }
+        if (Input.GetKeyDown(KeyCode.Alpha7))
+        {
+            currentBehaviour = TypeSteeringBehaviour.PathFollowing;
+            Debug.Log("Cambiado a PathFollowing");
+        }
+        if (Input.GetKeyDown(KeyCode.Alpha8))
+        {
+            currentBehaviour = TypeSteeringBehaviour.ObstacleAdvoice;
+            Debug.Log("Cambiado a Obstacle Avoidance");
+        }
     }
     private Vector3 CalculateSteeringForce()
     {
         if (target == null) return Vector3.zero;
 
+        Vector3 steeringForce = Vector3.zero;
+
         switch (currentBehaviour)
         {
             case TypeSteeringBehaviour.Seek:
-                return CalculateSeek(target.position);
+                steeringForce = CalculateSeek(target.position);
+                break;
             case TypeSteeringBehaviour.Flee:
-                return CalculateFlee(target.position);
+                steeringForce = CalculateFlee(target.position);
+                break;
             case TypeSteeringBehaviour.Evade:
-                return CalculateEvade();
+                steeringForce = CalculateEvade();
+                break;
             case TypeSteeringBehaviour.Arrive:
-                return CalculateArrive(target.position);
+                steeringForce = CalculateArrive(target.position);
+                break;
             case TypeSteeringBehaviour.Pursuit:
-                return CalculatePursuit();
+                steeringForce = CalculatePursuit();
+                break;
             case TypeSteeringBehaviour.Wander:
-                 CalculateWander();
+                CalculateWander();
                 return Vector3.zero;
-
-            default:
-                return Vector3.zero;
+            case TypeSteeringBehaviour.PathFollowing:
+                steeringForce = CalculatePathFollowing();
+                break;
+            case TypeSteeringBehaviour.ObstacleAdvoice:
+                steeringForce = CalculateObstacleAvoidance();
+                break;
         }
+
+        steeringForce += CalculateObstacleAvoidance();
+
+        return steeringForce;
     }
     private Vector3 CalculateSeek(Vector3 targetPosition)
     {
@@ -139,6 +176,7 @@ public class AI : MonoBehaviour
         Vector3 targetVelocity = (target.position - targetPreviousPosition) / Time.deltaTime;
 
         Vector3 targetFuturePosition = target.position + targetVelocity * evasionPredictionTime;
+        targetFuturePosition.y = transform.position.y;
 
         return CalculateFlee(targetFuturePosition);
     }
@@ -186,5 +224,53 @@ public class AI : MonoBehaviour
 
         velocity += (desiredVelocity - velocity) * Time.deltaTime;
         velocity.y = 0;
+    }
+    private Vector3 CalculatePathFollowing()
+    {
+        if (pathFollowing == null) return Vector3.zero;
+
+        Transform nextPoint = pathFollowing.NextPoint(transform.position);
+        if (nextPoint == null) return Vector3.zero;
+
+        return CalculateSeek(nextPoint.position);
+    }
+    private Vector3 CalculateObstacleAvoidance()
+    {
+        RaycastHit hit;
+        Vector3 avoidanceForce = Vector3.zero;
+        bool obstacleDetected = false;
+
+        // Rayo central
+        if (Physics.Raycast(transform.position, transform.forward, out hit, obstacleDetectionDistance))
+        {
+            avoidanceForce += Vector3.Reflect(transform.forward, hit.normal) * avoidanceStrength;
+            obstacleDetected = true;
+        }
+
+        // Rayo izquierdo
+        if (Physics.Raycast(transform.position, Quaternion.Euler(0, -30, 0) * transform.forward, out hit, obstacleDetectionDistance * 0.75f))
+        {
+            avoidanceForce += Vector3.Reflect(transform.forward, hit.normal) * (avoidanceStrength * 0.5f);
+            obstacleDetected = true;
+        }
+
+        // Rayo derecho
+        if (Physics.Raycast(transform.position, Quaternion.Euler(0, 30, 0) * transform.forward, out hit, obstacleDetectionDistance * 0.75f))
+        {
+            avoidanceForce += Vector3.Reflect(transform.forward, hit.normal) * (avoidanceStrength * 0.5f);
+            obstacleDetected = true;
+        }
+
+        if (obstacleDetected)
+        {
+            if (velocity.magnitude < 0.1f)
+            {
+                transform.Rotate(0, Random.Range(-90f, 90f), 0);
+                avoidanceForce += -transform.forward * 15f; 
+            }
+
+            return avoidanceForce.normalized * avoidanceStrength;
+        }
+        return Vector3.zero;
     }
 }
